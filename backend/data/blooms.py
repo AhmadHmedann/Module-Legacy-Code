@@ -13,6 +13,7 @@ class Bloom:
     sender: User
     content: str
     sent_timestamp: datetime.datetime
+    rebloom_of: Optional[int]
 
 
 def add_bloom(*, sender: User, content: str) -> Bloom:
@@ -35,7 +36,38 @@ def add_bloom(*, sender: User, content: str) -> Bloom:
                 "INSERT INTO hashtags (hashtag, bloom_id) VALUES (%(hashtag)s, %(bloom_id)s)",
                 dict(hashtag=hashtag, bloom_id=bloom_id),
             )
+            
+            
+def rebloom(*, sender: User, bloom: Bloom) -> Bloom:
+    now = datetime.datetime.now(tz=datetime.UTC)
+    bloom_id = int(now.timestamp() * 1000000)
 
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO blooms (
+                id,
+                sender_id,
+                content,
+                send_timestamp,
+                rebloom_of
+            )
+            VALUES (
+                %(bloom_id)s,
+                %(sender_id)s,
+                %(content)s,
+                %(timestamp)s,
+                %(rebloom_of)s
+            )
+            """,
+            dict(
+                bloom_id=bloom_id,
+                sender_id=sender.id,
+                content=bloom.content,
+                timestamp=now,
+                rebloom_of=bloom.id,
+            ),
+        )
 
 def get_blooms_for_user(
     username: str, *, before: Optional[int] = None, limit: Optional[int] = None
@@ -54,7 +86,7 @@ def get_blooms_for_user(
 
         cur.execute(
             f"""SELECT
-              blooms.id, users.username, content, send_timestamp
+              blooms.id, users.username, content, send_timestamp, rebloom_of
             FROM
               blooms INNER JOIN users ON users.id = blooms.sender_id
             WHERE
@@ -68,13 +100,14 @@ def get_blooms_for_user(
         rows = cur.fetchall()
         blooms = []
         for row in rows:
-            bloom_id, sender_username, content, timestamp = row
+            bloom_id, sender_username, content, timestamp, rebloom_of = row
             blooms.append(
                 Bloom(
                     id=bloom_id,
                     sender=sender_username,
                     content=content,
                     sent_timestamp=timestamp,
+                    rebloom_of=rebloom_of,
                 )
             )
     return blooms
@@ -83,18 +116,19 @@ def get_blooms_for_user(
 def get_bloom(bloom_id: int) -> Optional[Bloom]:
     with db_cursor() as cur:
         cur.execute(
-            "SELECT blooms.id, users.username, content, send_timestamp FROM blooms INNER JOIN users ON users.id = blooms.sender_id WHERE blooms.id = %s",
+            "SELECT blooms.id, users.username, content, send_timestamp, rebloom_of FROM blooms INNER JOIN users ON users.id = blooms.sender_id WHERE blooms.id = %s",
             (bloom_id,),
         )
         row = cur.fetchone()
         if row is None:
             return None
-        bloom_id, sender_username, content, timestamp = row
+        bloom_id, sender_username, content, timestamp, rebloom_of = row
         return Bloom(
             id=bloom_id,
             sender=sender_username,
             content=content,
             sent_timestamp=timestamp,
+            rebloom_of=rebloom_of,
         )
 
 
@@ -108,7 +142,7 @@ def get_blooms_with_hashtag(
     with db_cursor() as cur:
         cur.execute(
             f"""SELECT
-              blooms.id, users.username, content, send_timestamp
+              blooms.id, users.username, content, send_timestamp, rebloom_of
             FROM
               blooms INNER JOIN hashtags ON blooms.id = hashtags.bloom_id INNER JOIN users ON blooms.sender_id = users.id
             WHERE
@@ -121,13 +155,15 @@ def get_blooms_with_hashtag(
         rows = cur.fetchall()
         blooms = []
         for row in rows:
-            bloom_id, sender_username, content, timestamp = row
+            bloom_id, sender_username, content, timestamp, rebloom_of = row
             blooms.append(
                 Bloom(
                     id=bloom_id,
                     sender=sender_username,
                     content=content,
                     sent_timestamp=timestamp,
+                    rebloom_of=rebloom_of,
+                    
                 )
             )
     return blooms

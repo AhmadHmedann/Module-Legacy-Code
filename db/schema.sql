@@ -10,7 +10,8 @@ CREATE TABLE blooms (
     id BIGSERIAL NOT NULL PRIMARY KEY,
     sender_id INT NOT NULL REFERENCES users(id),
     content TEXT NOT NULL,
-    send_timestamp TIMESTAMP NOT NULL
+    send_timestamp TIMESTAMP NOT NULL,
+    rebloom_of BIGINT REFERENCES blooms(id)   -- store the id of original bloom then I will calculate the numbers of rows  have rebloom_of id, to know how many re-bloom
 );
 
 CREATE TABLE follows (

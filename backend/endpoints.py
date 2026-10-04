@@ -165,7 +165,29 @@ def send_bloom():
             "success": True,
         }
     )
+    
+    
+@jwt_required()
+def do_rebloom():
+    type_check_error = verify_request_fields({"bloom_id": int})
+    if type_check_error is not None:
+        return type_check_error
 
+    current_user = get_current_user()
+
+    bloom_id = request.json["bloom_id"]
+    bloom = blooms.get_bloom(bloom_id)
+
+    if bloom is None:
+        return make_response(("Bloom not found", 404))
+
+    blooms.rebloom(sender=current_user, bloom=bloom)
+
+    return jsonify(
+        {
+            "success": True,
+        }
+    )
 
 def get_bloom(id_str):
     try:
