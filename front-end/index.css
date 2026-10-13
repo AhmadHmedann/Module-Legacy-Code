@@ -181,6 +181,13 @@ dialog {
     "char-count submit" auto / 1fr min-content;
 }
 
+.bloom__rebloom-info {
+  opacity: 0.9;
+  font-style: italic;
+  color: gray;
+}
+
+
 .bloom-form__field {
   grid-area: textarea;
 }
@@ -253,6 +260,8 @@ dialog {
 [data-error] {
   color: var(--error);
 }
+
+
 
 @keyframes fade {
   from {
