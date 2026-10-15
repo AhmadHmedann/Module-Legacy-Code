@@ -180,24 +180,17 @@ def get_bloom(id_str):
 
 @jwt_required()
 def rebloom():
-    type_check_error = verify_request_fields({"bloom_id": int})
-    if type_check_error is not None:
-        return type_check_error
-
     user = get_current_user()
 
-    bloom = blooms.get_bloom(request.json["bloom_id"])
+    bloom_id = request.json.get("bloom_id")
+    original = blooms.get_bloom(bloom_id)
 
-    if bloom is None:
-        return make_response(("Bloom not found", 404))
+    if not original:
+        return jsonify({"error": "Not found"}), 404
 
-    blooms.rebloom(sender=user, bloom=bloom)
+    blooms.add_rebloom(sender=user, bloom_id=bloom_id)
 
-    return jsonify(
-        {
-            "success": True,
-        }
-    )
+    return jsonify({"success": True})
 
 
 @jwt_required()

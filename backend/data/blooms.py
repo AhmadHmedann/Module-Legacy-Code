@@ -18,12 +18,10 @@ class Bloom:
     rebloom_count: int = 0
 
 
-
 def add_bloom(
     *,
     sender: User,
     content: str,
-    original_bloom_id: Optional[int] = None,
 ) -> Bloom:
     hashtags = [word[1:] for word in content.split(" ") if word.startswith("#")]
 
@@ -37,15 +35,13 @@ def add_bloom(
                 id,
                 sender_id,
                 content,
-                send_timestamp,
-                original_bloom_id
+                send_timestamp
             )
             VALUES (
                 %(bloom_id)s,
                 %(sender_id)s,
                 %(content)s,
-                %(timestamp)s,
-                %(original_bloom_id)s
+                %(timestamp)s
             )
             """,
             dict(
@@ -53,7 +49,6 @@ def add_bloom(
                 sender_id=sender.id,
                 content=content,
                 timestamp=now,
-                original_bloom_id=original_bloom_id,
             ),
         )
 
@@ -70,12 +65,21 @@ def add_bloom(
             )
 
 
-def rebloom(*, sender: User, bloom: Bloom) -> None:
-    add_bloom(
-        sender=sender,
-        content=bloom.content,
-        original_bloom_id=bloom.id,
-    )
+def add_rebloom(*, sender: User, bloom_id: int):
+    now = datetime.datetime.now(tz=datetime.UTC)
+
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO reblooms (sender_id, bloom_id, send_timestamp)
+            VALUES (%(sender_id)s, %(bloom_id)s, %(timestamp)s)
+            """,
+            {
+                "sender_id": sender.id,
+                "bloom_id": bloom_id,
+                "timestamp": now,
+            },
+        )
 
 
 def get_blooms_for_user(
@@ -85,6 +89,7 @@ def get_blooms_for_user(
         kwargs = {
             "sender_username": username,
         }
+
         if before is not None:
             before_clause = "AND send_timestamp < %(before_limit)s"
             kwargs["before_limit"] = before
@@ -95,36 +100,71 @@ def get_blooms_for_user(
 
         cur.execute(
             f"""
-            SELECT
-                b.id,
-                u.username,
-                b.content,
-                b.send_timestamp,
-                b.original_bloom_id,
-                ou.username AS original_sender,
-                (
-                    SELECT COUNT(*)
-                    FROM blooms AS reblooms
-                    WHERE reblooms.original_bloom_id = b.id
-                ) AS rebloom_count
-            FROM blooms AS b
-            INNER JOIN users AS u
-                ON u.id = b.sender_id
-            LEFT JOIN blooms AS original_bloom
-                ON original_bloom.id = b.original_bloom_id
-            LEFT JOIN users AS ou
-                ON ou.id = original_bloom.sender_id
-            WHERE u.username = %(sender_username)s
-              {before_clause}
-            ORDER BY b.send_timestamp DESC
-            {limit_clause}
-            """,
-                    kwargs,
-                )
+    WITH all_blooms AS (
+        SELECT
+            b.id,
+            u.username AS sender_username,
+            b.content,
+            b.send_timestamp,
+            NULL::BIGINT AS original_bloom_id,
+            NULL::VARCHAR AS original_sender,
+            (
+                SELECT COUNT(*)
+                FROM reblooms r
+                WHERE r.bloom_id = b.id
+            ) AS rebloom_count
+        FROM blooms b
+        JOIN users u ON u.id = b.sender_id
+
+        UNION ALL
+
+        SELECT
+            r.id,
+            ru.username AS sender_username,
+            b.content,
+            r.send_timestamp,
+            r.bloom_id AS original_bloom_id,
+            ou.username AS original_sender,
+            (
+                SELECT COUNT(*)
+                FROM reblooms r2
+                WHERE r2.bloom_id = b.id
+            ) AS rebloom_count
+        FROM reblooms r
+        JOIN users ru ON ru.id = r.sender_id
+        JOIN blooms b ON b.id = r.bloom_id
+        JOIN users ou ON ou.id = b.sender_id
+    )
+    SELECT
+        id,
+        sender_username,
+        content,
+        send_timestamp,
+        original_bloom_id,
+        original_sender,
+        rebloom_count
+    FROM all_blooms
+    WHERE sender_username = %(sender_username)s
+    {before_clause}
+    ORDER BY send_timestamp DESC
+    {limit_clause}
+    """,
+            kwargs,
+        )
         rows = cur.fetchall()
         blooms = []
+
         for row in rows:
-            bloom_id, sender_username, content, timestamp, original_bloom_id, original_sender, rebloom_count = row
+            (
+                bloom_id,
+                sender_username,
+                content,
+                timestamp,
+                original_bloom_id,
+                original_sender,
+                rebloom_count,
+            ) = row
+
             blooms.append(
                 Bloom(
                     id=bloom_id,
@@ -136,8 +176,8 @@ def get_blooms_for_user(
                     rebloom_count=rebloom_count,
                 )
             )
-    return blooms
 
+    return blooms
 
 
 def get_bloom(bloom_id: int) -> Optional[Bloom]:
@@ -146,26 +186,41 @@ def get_bloom(bloom_id: int) -> Optional[Bloom]:
             """
             SELECT
                 b.id,
-                u.username,
+                u.username AS sender_username,
                 b.content,
                 b.send_timestamp,
-                b.original_bloom_id,
+                NULL::BIGINT AS original_bloom_id,
+                NULL::VARCHAR AS original_sender,
+                (
+                    SELECT COUNT(*)
+                    FROM reblooms r
+                    WHERE r.bloom_id = b.id
+                ) AS rebloom_count
+            FROM blooms b
+            JOIN users u ON u.id = b.sender_id
+            WHERE b.id = %(bloom_id)s
+
+            UNION ALL
+
+            SELECT
+                r.id,
+                ru.username AS sender_username,
+                b.content,
+                r.send_timestamp,
+                r.bloom_id AS original_bloom_id,
                 ou.username AS original_sender,
                 (
                     SELECT COUNT(*)
-                    FROM blooms AS reblooms
-                    WHERE reblooms.original_bloom_id = b.id
+                    FROM reblooms r2
+                    WHERE r2.bloom_id = b.id
                 ) AS rebloom_count
-            FROM blooms AS b
-            INNER JOIN users AS u
-                ON u.id = b.sender_id
-            LEFT JOIN blooms AS original_bloom
-                ON original_bloom.id = b.original_bloom_id
-            LEFT JOIN users AS ou
-                ON ou.id = original_bloom.sender_id
-            WHERE b.id = %s
+            FROM reblooms r
+            JOIN users ru ON ru.id = r.sender_id
+            JOIN blooms b ON b.id = r.bloom_id
+            JOIN users ou ON ou.id = b.sender_id
+            WHERE r.id = %(bloom_id)s
             """,
-            (bloom_id,),
+            {"bloom_id": bloom_id},
         )
 
         row = cur.fetchone()
@@ -180,7 +235,7 @@ def get_bloom(bloom_id: int) -> Optional[Bloom]:
             timestamp,
             original_bloom_id,
             original_sender,
-            rebloom_count
+            rebloom_count,
         ) = row
 
         return Bloom(
@@ -200,41 +255,80 @@ def get_blooms_with_hashtag(
     kwargs = {
         "hashtag_without_leading_hash": hashtag_without_leading_hash,
     }
+
     limit_clause = make_limit_clause(limit, kwargs)
+
     with db_cursor() as cur:
         cur.execute(
             f"""
-        SELECT
-            b.id,
-            u.username,
-            b.content,
-            b.send_timestamp,
-            b.original_bloom_id,
-            ou.username AS original_sender,
-            (
-                SELECT COUNT(*)
-                FROM blooms AS reblooms
-                WHERE reblooms.original_bloom_id = b.id
-            ) AS rebloom_count
-        FROM blooms AS b
-        INNER JOIN hashtags AS h
-            ON b.id = h.bloom_id
-        INNER JOIN users AS u
-            ON b.sender_id = u.id
-        LEFT JOIN blooms AS original_bloom
-            ON original_bloom.id = b.original_bloom_id
-        LEFT JOIN users AS ou
-            ON ou.id = original_bloom.sender_id
-        WHERE h.hashtag = %(hashtag_without_leading_hash)s
-        ORDER BY b.send_timestamp DESC
-        {limit_clause}
-        """,
-                kwargs,
+            WITH all_blooms AS (
+                SELECT
+                    b.id,
+                    u.username AS sender_username,
+                    b.content,
+                    b.send_timestamp,
+                    NULL::BIGINT AS original_bloom_id,
+                    NULL::VARCHAR AS original_sender,
+                    (
+                        SELECT COUNT(*)
+                        FROM reblooms r
+                        WHERE r.bloom_id = b.id
+                    ) AS rebloom_count,
+                    b.id AS source_bloom_id
+                FROM blooms b
+                JOIN users u ON u.id = b.sender_id
+
+                UNION ALL
+
+                SELECT
+                    r.id,
+                    ru.username AS sender_username,
+                    b.content,
+                    r.send_timestamp,
+                    r.bloom_id AS original_bloom_id,
+                    ou.username AS original_sender,
+                    (
+                        SELECT COUNT(*)
+                        FROM reblooms r2
+                        WHERE r2.bloom_id = b.id
+                    ) AS rebloom_count,
+                    b.id AS source_bloom_id
+                FROM reblooms r
+                JOIN users ru ON ru.id = r.sender_id
+                JOIN blooms b ON b.id = r.bloom_id
+                JOIN users ou ON ou.id = b.sender_id
             )
+            SELECT
+                ab.id,
+                ab.sender_username,
+                ab.content,
+                ab.send_timestamp,
+                ab.original_bloom_id,
+                ab.original_sender,
+                ab.rebloom_count
+            FROM all_blooms ab
+            JOIN hashtags h ON h.bloom_id = ab.source_bloom_id
+            WHERE h.hashtag = %(hashtag_without_leading_hash)s
+            ORDER BY ab.send_timestamp DESC
+            {limit_clause}
+            """,
+            kwargs,
+        )
+
         rows = cur.fetchall()
         blooms = []
+
         for row in rows:
-            bloom_id, sender_username, content, timestamp, original_bloom_id, original_sender,rebloom_count, = row
+            (
+                bloom_id,
+                sender_username,
+                content,
+                timestamp,
+                original_bloom_id,
+                original_sender,
+                rebloom_count,
+            ) = row
+
             blooms.append(
                 Bloom(
                     id=bloom_id,
@@ -246,6 +340,7 @@ def get_blooms_with_hashtag(
                     rebloom_count=rebloom_count,
                 )
             )
+
     return blooms
 
 
